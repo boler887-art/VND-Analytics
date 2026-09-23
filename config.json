@@ -1,6 +1,6 @@
 {
   "systemName": "NORMATRIX VND Analytics",
-  "version": "1.0.3",
+  "version": "1.1.2",
   "locale": "ru-RU",
   "dataSources": {
     "vndRegistry": "vnd_master.xlsx",
@@ -25,7 +25,7 @@
     "exactDuplicateMinChars": 60,
     "nearDuplicateThreshold": 0.72,
     "conflictSimilarityThreshold": 0.55,
-    "maxCandidatePairs": 20000,
+    "maxCandidatePairs": 100000,
     "autoRunAfterIngest": false,
     "autoOcrImages": true,
     "includeHistoricalRegistryRows": true,

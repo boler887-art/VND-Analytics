@@ -7,6 +7,21 @@
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
   <title>NORMATRIX VND Analytics</title>
   <link rel="stylesheet" href="styles.css" />
+  <style>
+    .monitoring-wrap{max-width:100%;overflow:auto}
+    .legal-monitor-table{min-width:1900px;table-layout:fixed}
+    .legal-monitor-table th,.legal-monitor-table td{white-space:normal;vertical-align:top;line-height:1.42}
+    .legal-monitor-table th:nth-child(1){width:220px}
+    .legal-monitor-table th:nth-child(2){width:300px}
+    .legal-monitor-table th:nth-child(3){width:180px}
+    .legal-monitor-table th:nth-child(4){width:300px}
+    .legal-monitor-table th:nth-child(5){width:300px}
+    .legal-monitor-table th:nth-child(6){width:360px}
+    .legal-monitor-table th:nth-child(7){width:300px}
+    .monitor-note{margin-top:8px;font-size:12px;line-height:1.35;color:#526375}
+    .monitor-excerpt{margin-top:8px;padding:8px 10px;border-left:3px solid #c9d7e5;background:#f7fafc;font-size:12px;line-height:1.4;color:#33485c}
+    .upload-split{align-items:stretch}.upload-split>.panel{margin:0}.report-zone{border-color:#b7cbe0;background:#f8fbfe}.source-type{display:inline-block;margin-top:6px;font-size:11px;color:#526375}
+  </style>
 </head>
 <body>
 <div class="app-shell">
@@ -28,7 +43,7 @@
       <button data-page="quality">✓ Качество данных</button>
       <button data-page="reports">⇩ Отчёты</button>
     </nav>
-    <div class="side-footer">NORMATRIX v1.0.3<br>Реестр и структура читаются из корня сайта автоматически.</div>
+    <div class="side-footer">NORMATRIX v1.1.2<br>Реестр и структура читаются из корня сайта автоматически.</div>
   </aside>
 
   <main class="main">
@@ -47,7 +62,7 @@
       <section class="page active" id="page-dashboard">
         <div class="page-head">
           <div><h3>Состояние нормативной базы</h3><p>Общая картина по реестру и текущей загруженной сессии. Каждая карточка раскрывается до ВНД, пункта и исходного фрагмента.</p></div>
-          <div class="actions"><button class="btn primary" data-go="upload">Загрузить ВНД</button></div>
+          <div class="actions"><button class="btn primary" data-go="upload">Загрузить данные</button></div>
         </div>
         <div class="grid kpi" id="dashboardKpis"></div>
         <div class="split">
@@ -58,17 +73,29 @@
       </section>
 
       <section class="page" id="page-upload">
-        <div class="page-head"><div><h3>Загрузка ВНД</h3><p>Поддерживаются одиночные документы и ZIP‑пакеты одного ВНД. Рекомендуемый формат архива: <b>VND-000001.zip</b>.</p></div></div>
-        <div class="panel">
-          <div class="upload-zone" id="dropZone">
-            <div class="big">Перетащите 1–300 ВНД или выберите файлы</div>
-            <p>PDF, DOC/DOCX, XLS/XLSX, TXT, JPG/JPEG, PNG, TIFF, WEBP, ZIP. Старый бинарный DOC портал пытается извлечь локально без отправки файла наружу. Для сканов действует безопасный автоматический OCR, а оставшиеся страницы можно дораспознать вручную очередью. В одном ZIP могут находиться основной текст, приказ, приложения, изменения и изображения страниц.</p>
-            <div class="upload-actions"><label class="btn primary" for="fileInput">Выбрать файлы</label><button class="btn" id="runAnalysisBtn" disabled>Запустить / повторить анализ</button><button class="btn" id="runPendingOcrBtn" disabled>OCR: распознать ожидающие</button></div>
-            <input id="fileInput" type="file" multiple accept=".zip,.pdf,.docx,.doc,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.tif,.tiff,.webp" />
-            <div class="privacy-note"><span>🔒</span><div><b>Файлы остаются в памяти текущей вкладки.</b> Код не использует localStorage, sessionStorage, IndexedDB или cookies для пользовательских документов. Внешняя правовая проверка отключена для текста ВНД и может передавать только реквизиты НПА после настройки защищённого backend.</div></div>
+        <div class="page-head"><div><h3>Загрузка данных</h3><p>Два независимых режима: исходные ВНД для полного анализа и ранее сохранённые машинные отчёты NORMATRIX для быстрого суммарного анализа без повторного OCR и чтения документов.</p></div></div>
+        <div class="split upload-split">
+          <div class="panel">
+            <div class="panel-title"><div><h4>1. ВНД для анализа</h4><span class="meta">полный цикл обработки</span></div></div>
+            <div class="upload-zone" id="dropZone">
+              <div class="big">Перетащите 1–300 ВНД или выберите файлы</div>
+              <p>PDF, DOCX, DOC, XLSX, XLS, TXT, JPG/JPEG, PNG, TIFF, WEBP, ZIP. В одном ZIP могут находиться основной текст, приказ, приложения, изменения и изображения страниц.</p>
+              <div class="upload-actions"><label class="btn primary" for="fileInput">Выбрать ВНД</label><button class="btn" id="runAnalysisBtn" disabled>Запустить / повторить анализ</button><button class="btn" id="runPendingOcrBtn" disabled>OCR: нет ожидающих</button></div>
+              <input id="fileInput" type="file" multiple accept=".zip,.pdf,.docx,.doc,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.tif,.tiff,.webp" />
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title"><div><h4>2. Отчёты ВНД для портала</h4><span class="meta">без повторного OCR</span></div></div>
+            <div class="upload-zone report-zone" id="reportDropZone">
+              <div class="big">Перетащите до 300 файлов .normatrix</div>
+              <p>Это машинные отчёты, созданные самим NORMATRIX. Можно также загрузить ZIP‑пакет, содержащий несколько файлов <b>.normatrix</b>. Они предназначены только для повторной загрузки в портал, а не для чтения человеком.</p>
+              <div class="upload-actions"><label class="btn primary" for="analysisReportInput">Выбрать отчёты ВНД</label></div>
+              <input id="analysisReportInput" type="file" multiple accept=".normatrix,.zip" />
+            </div>
           </div>
         </div>
-        <div class="panel"><div class="panel-title"><h4>Проверка пакетов</h4><span class="meta" id="uploadSummary">0 ВНД / 0 файлов</span></div><div id="ingestProgress" class="hidden"><div class="progress"><span id="ingestBar"></span></div><div class="footer-note" id="ingestText"></div></div><div id="packageTable"></div></div>
+        <div class="privacy-note"><span>🔒</span><div><b>ZERO PERSISTENCE.</b> Исходные документы и машинные отчёты существуют только в памяти текущей вкладки. После очистки/обновления страницы данные сессии не восстанавливаются.</div></div>
+        <div class="panel"><div class="panel-title"><h4>Состав текущей сессии</h4><span class="meta" id="uploadSummary">0 ВНД / 0 файлов</span></div><div id="ingestProgress" class="hidden"><div class="progress"><span id="ingestBar"></span></div><div class="footer-note" id="ingestText"></div></div><div id="packageTable"></div></div>
       </section>
 
       <section class="page" id="page-registry">
@@ -92,9 +119,12 @@
       </section>
 
       <section class="page" id="page-monitoring">
-        <div class="page-head"><div><h3>Правовой мониторинг</h3><p>Восемь категорий формы правового мониторинга. Локальные выводы являются аналитическими кандидатами до подтверждения специалистом.</p></div></div>
-        <div class="category-grid" id="monitoringCategories"></div>
-        <div class="panel" style="margin-top:16px"><div class="panel-title"><h4>Выявленные замечания</h4><span class="meta" id="issuesMeta"></span></div><div id="issuesTable"></div></div>
+        <div class="page-head"><div><h3>Правовой мониторинг</h3><p>Результаты формируются по каждому ВНД в понятной форме: документ → реквизиты → структурный элемент → сопоставляемый акт → меры → актуализация. Технические ID не используются как основной способ представления.</p></div></div>
+        <div class="panel">
+          <div class="panel-title"><div><h4>Виды недостатков норм поведения</h4><span class="meta">присваиваются автоматически по выявленным замечаниям</span></div><button class="btn sm" id="clearIssueFilterBtn">Все виды</button></div>
+          <div class="category-grid" id="monitoringCategories"></div>
+        </div>
+        <div class="panel" style="margin-top:16px"><div class="panel-title"><h4>Результаты правового мониторинга</h4><span class="meta" id="issuesMeta"></span></div><div id="issuesTable"></div></div>
       </section>
 
       <section class="page" id="page-duplicates">
@@ -123,11 +153,12 @@
         <div class="page-head"><div><h3>Отчёты текущей сессии</h3><p>Экспортируется только текущий результат. После очистки портал не хранит копии.</p></div></div>
         <div class="panel">
           <div class="stat-line">
-            <button class="btn primary" id="exportXlsxBtn">Скачать аналитический Excel</button>
-            <button class="btn" id="exportJsonBtn">Скачать JSON результатов</button>
-            <button class="btn" id="printReportBtn">Печать / PDF</button>
+            <button class="btn primary" id="exportNormatrixBtn">Скачать отчёты ВНД для портала (.normatrix)</button>
+            <button class="btn" id="exportXlsxBtn">Скачать проверенный Excel</button>
+            <button class="btn" id="printReportBtn">Проверенный отчёт / PDF</button>
+            <button class="btn" id="exportJsonBtn">Технический JSON (диагностика)</button>
           </div>
-          <div class="footer-note">В Excel создаются листы: «Свод», «Приложение 3», «Рекомендации СП», «НПА», «Качество данных».</div>
+          <div class="footer-note">Файл <b>.normatrix</b> — машинный переносимый анализ ВНД для повторной загрузки в портал. Проверенные Excel/PDF и Приложение 3 включают только замечания, подтверждённые специалистом; отклонённые и неподтверждённые кандидаты в официальный результат не попадают.</div>
         </div>
         <div class="panel"><div class="panel-title"><h4>Краткий отчёт</h4></div><div id="reportPreview"></div></div>
       </section>
