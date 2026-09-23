@@ -331,16 +331,26 @@ function renderPackages(){
   $('#packageTable').querySelectorAll('[data-pkg]').forEach(x=>x.onclick=()=>openPackage(x.dataset.pkg));
 }
 
+function canReuseParsedFile(f){
+  // В пределах текущей ZERO-PERSISTENCE сессии уже извлечённый текст/OCR является
+  // рабочим кэшем в памяти. Повторный запуск анализа не должен заново читать
+  // тот же PDF и снова ставить успешно распознанные страницы в OCR-очередь.
+  return Array.isArray(f.pages) && f.pages.length>0 &&
+    ['done','ocr-pending','legacy-doc-partial','doc-unreadable'].includes(f.parseStatus);
+}
 async function processAllPackages(){
   if(S.processing||!S.packages.length)return; const sourcePkgs=S.packages.filter(p=>!p.importedAnalysis); if(!sourcePkgs.length){rebuildAnalysisFromParsedFiles();renderAll();goPage('dashboard');toast(`Суммарный анализ построен по ${S.packages.length} отчётам ВНД`,'ok');return;}
   S.processing=true; $('#runAnalysisBtn').disabled=true; $('#ingestProgress').classList.remove('hidden');
   S.issues=[];S.legalRefs=[];S.duplicates=[];S.conflicts=[];S.recommendations=[];S.ocrCount=0;
   let done=0; const total=sourcePkgs.length;
   for(const p of sourcePkgs){ p.analysisStatus='processing'; p.units=[]; p.errors=[]; renderPackages();
-    for(const f of p.files){ try{await parsePhysical(f); const inferred=inferRoleFromContent(f); if(f.role==='OTHER'&&inferred!=='OTHER')f.role=inferred; p.units.push(...unitsFromFile(f,p));}catch(e){f.parseStatus='error';f.parseError=e.message;p.errors.push(`${f.name}: ${e.message}`);} }
+    for(const f of p.files){ try{
+      if(!canReuseParsedFile(f)) await parsePhysical(f);
+      const inferred=inferRoleFromContent(f); if(f.role==='OTHER'&&inferred!=='OTHER')f.role=inferred; p.units.push(...unitsFromFile(f,p));
+    }catch(e){f.parseStatus='error';f.parseError=e.message;p.errors.push(`${f.name}: ${e.message}`);} }
     detectPrimaryFiles(p,true); p.parsed=true;p.analysisStatus='done';done++; updateProgress(done,total,`Обработан ${p.containerName}`);
   }
-  runLocalAnalysis(); buildRecommendations(); buildQuality(); S.processing=false; $('#runAnalysisBtn').disabled=false; renderAll(); goPage('dashboard'); toast(`Анализ завершён: ${S.packages.length} уникальных ВНД, ${S.issues.length} замечаний-кандидатов`,'ok');
+  runLocalAnalysis(); buildRecommendations(); buildQuality(); S.processing=false; $('#runAnalysisBtn').disabled=false; updateOcrButton(); renderAll(); goPage('dashboard'); toast(`Анализ завершён: ${S.packages.length} уникальных ВНД, ${S.issues.length} замечаний-кандидатов`,'ok');
 }
 function updateProgress(done,total,text){ const pct=Math.round(done/total*100);$('#ingestBar').style.width=`${pct}%`;$('#ingestText').textContent=`${pct}% — ${text}`; }
 async function parsePhysical(f){
@@ -442,18 +452,32 @@ async function runPendingOcr(){
   const selected=tasks.slice(0,max); if(selected.length>80&&!confirm(`Запустить OCR для ${selected.length} страниц/изображений? Обработка идёт последовательно и может заметно нагружать компьютер.`))return;
   S.processing=true; $('#runAnalysisBtn').disabled=true; $('#runPendingOcrBtn').disabled=true; $('#ingestProgress').classList.remove('hidden'); let done=0;
   const byFile=new Map(); for(const t of selected){if(!byFile.has(t.f))byFile.set(t.f,[]);byFile.get(t.f).push(t);}
+  let failed=0;
   for(const [f,fts] of byFile){
-    try{
-      if(f.e==='pdf'){
-        const ab=await f.blob.arrayBuffer(),pdf=await pdfjsLib.getDocument({data:ab}).promise;
-        for(const t of fts){const pg=await pdf.getPage(t.page);const r=await ocrPdfPage(pg);const rec=f.pages.find(x=>x.number===t.page);if(rec){rec.text=r.text;rec.ocrConfidence=r.confidence;rec.ocrPending=false;}f.ocrPendingPages=(f.ocrPendingPages||[]).filter(x=>x!==t.page);done++;updateProgress(done,selected.length,`${f.name} · стр. ${t.page}`);await new Promise(r=>setTimeout(r,0));}
-        f.text=f.pages.map(x=>x.text||'').join('\n');f.parseStatus=f.ocrPendingPages.length?'ocr-pending':'done';
-      }else{
-        const r=await recognizeOcr(f.blob);f.text=r.text;f.pages=[{number:pageNumFromName(f.name),text:f.text,ocrConfidence:r.confidence,ocrPending:false}];f.ocrPendingImage=false;f.parseStatus='done';done++;updateProgress(done,selected.length,f.name);await new Promise(r=>setTimeout(r,0));
+    if(f.e==='pdf'){
+      let pdf=null;
+      try{const ab=await f.blob.arrayBuffer();pdf=await pdfjsLib.getDocument({data:ab}).promise;}catch(e){failed+=fts.length;f.parseStatus='ocr-pending';f.parseError=`OCR: не удалось открыть PDF — ${e.message}`;continue;}
+      const pageErrors=[];
+      for(const t of fts){
+        try{
+          const pg=await pdf.getPage(t.page),r=await ocrPdfPage(pg),rec=f.pages.find(x=>x.number===t.page);
+          if(rec){rec.text=r.text;rec.ocrConfidence=r.confidence;rec.ocrPending=false;}
+          f.ocrPendingPages=(f.ocrPendingPages||[]).filter(x=>x!==t.page);done++;updateProgress(done+failed,selected.length,`${f.name} · стр. ${t.page}`);
+        }catch(e){failed++;pageErrors.push(`${t.page}: ${e.message}`);updateProgress(done+failed,selected.length,`${f.name} · стр. ${t.page} — ошибка OCR`);}
+        await new Promise(r=>setTimeout(r,0));
       }
-    }catch(e){f.parseStatus='ocr-pending';f.parseError=`OCR: ${e.message}`;}
+      f.text=f.pages.map(x=>x.text||'').join('\n');
+      f.parseStatus=(f.ocrPendingPages||[]).length?'ocr-pending':'done';
+      f.parseError=pageErrors.length?`OCR не выполнен для страниц: ${pageErrors.slice(0,8).join('; ')}${pageErrors.length>8?'…':''}`:'';
+    }else{
+      try{
+        const r=await recognizeOcr(f.blob);f.text=r.text;f.pages=[{number:pageNumFromName(f.name),text:f.text,ocrConfidence:r.confidence,ocrPending:false}];f.ocrPendingImage=false;f.parseStatus='done';f.parseError='';done++;updateProgress(done+failed,selected.length,f.name);
+      }catch(e){failed++;f.parseStatus='ocr-pending';f.parseError=`OCR: ${e.message}`;updateProgress(done+failed,selected.length,`${f.name} — ошибка OCR`);}
+      await new Promise(r=>setTimeout(r,0));
+    }
   }
-  rebuildAnalysisFromParsedFiles(); S.processing=false; $('#runAnalysisBtn').disabled=false; updateOcrButton(); renderAll(); toast(`OCR завершён: обработано ${done} из ${selected.length}`,'ok');
+  rebuildAnalysisFromParsedFiles(); S.processing=false; $('#runAnalysisBtn').disabled=false; updateOcrButton(); renderAll();
+  const left=pendingOcrTasks().length; toast(`OCR завершён: успешно ${done}, ошибок ${failed}, осталось в очереди ${left}`,failed?'warn':'ok');
 }
 function rebuildAnalysisFromParsedFiles(){
   S.issues=[];S.legalRefs=[];S.duplicates=[];S.conflicts=[];S.recommendations=[];

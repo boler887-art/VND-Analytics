@@ -1,8 +1,8 @@
 {
-  "portalVersion": "1.1.2",
+  "portalVersion": "1.1.3",
   "dataSchemaVersion": "1.0",
-  "analysisRulesVersion": "1.1.2",
+  "analysisRulesVersion": "1.1.3",
   "methodology": "NORMATRIX VND Analytics — локальный предварительный аудит + подключаемая внешняя правовая верификация",
-  "version": "1.1.2",
-  "portal_version": "1.1.2"
+  "version": "1.1.3",
+  "portal_version": "1.1.3"
 }
