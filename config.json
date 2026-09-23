@@ -1,6 +1,6 @@
 {
   "systemName": "NORMATRIX VND Analytics",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "locale": "ru-RU",
   "dataSources": {
     "vndRegistry": "vnd_master.xlsx",
@@ -30,7 +30,8 @@
     "autoOcrImages": true,
     "includeHistoricalRegistryRows": true,
     "legacyDocLocalExtraction": true,
-    "manualOcrQueue": true
+    "manualOcrQueue": true,
+    "conflictEngine": "2.0"
   },
   "legalVerification": {
     "enabled": true,

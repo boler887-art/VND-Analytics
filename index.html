@@ -43,7 +43,7 @@
       <button data-page="quality">✓ Качество данных</button>
       <button data-page="reports">⇩ Отчёты</button>
     </nav>
-    <div class="side-footer">NORMATRIX v1.1.3<br>Реестр и структура читаются из корня сайта автоматически.</div>
+    <div class="side-footer">NORMATRIX v1.2.0<br>Реестр и структура читаются из корня сайта автоматически.</div>
   </aside>
 
   <main class="main">
@@ -133,8 +133,9 @@
       </section>
 
       <section class="page" id="page-conflicts">
-        <div class="page-head"><div><h3>Противоречия</h3><p>Потенциальные конфликты сроков, модальности, полномочий, терминов и субъектов ответственности.</p></div></div>
-        <div class="panel"><div id="conflictsTable"></div></div>
+        <div class="page-head"><div><h3>Противоречия</h3><p>Структурное сопоставление норм: субъект, действие, объект, полномочия, обязанности, ответственность, модальность, сроки, условия, исключения, сфера действия, контроль, согласование/утверждение и нормативное основание.</p></div></div>
+        <div class="panel"><div class="panel-title"><div><h4>Типы противоречий</h4><span class="meta">клик по типу фильтрует найденные пары норм</span></div><button class="btn sm" id="clearConflictFilterBtn">Все типы</button></div><div id="conflictTypeCards" class="category-grid"></div></div>
+        <div class="panel" style="margin-top:16px"><div class="panel-title"><h4>Найденные потенциальные противоречия</h4><span class="meta" id="conflictsMeta"></span></div><div id="conflictsTable"></div></div>
       </section>
 
       <section class="page" id="page-legalrefs">
