@@ -1,6 +1,6 @@
 {
   "systemName": "NORMATRIX VND Analytics",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "locale": "ru-RU",
   "dataSources": {
     "vndRegistry": "vnd_master.xlsx",
@@ -18,7 +18,8 @@
     "maxPhysicalFiles": 5000,
     "maxSingleFileMB": 100,
     "maxSessionMB": 2048,
-    "maxAutoOcrImages": 20
+    "maxAutoOcrImages": 40,
+    "maxManualOcrPages": 1200
   },
   "analysis": {
     "exactDuplicateMinChars": 60,
@@ -27,7 +28,9 @@
     "maxCandidatePairs": 20000,
     "autoRunAfterIngest": false,
     "autoOcrImages": true,
-    "includeHistoricalRegistryRows": true
+    "includeHistoricalRegistryRows": true,
+    "legacyDocLocalExtraction": true,
+    "manualOcrQueue": true
   },
   "legalVerification": {
     "enabled": true,

@@ -117,7 +117,7 @@ function goPage(p){ S.currentPage=p; $$('.page').forEach(x=>x.classList.toggle('
 
 function renderAll(){
   $('#navRegistryCount').textContent=S.registry.length; $('#navIssuesCount').textContent=S.issues.length;
-  renderDashboard(); renderRegistryFilters(); renderRegistry(); renderPackages(); renderMonitoring(); renderDuplicates(); renderConflicts(); renderLegalRefs(); renderDepartments(); renderQuality(); renderReports();
+  renderDashboard(); renderRegistryFilters(); renderRegistry(); renderPackages(); renderMonitoring(); renderDuplicates(); renderConflicts(); renderLegalRefs(); renderDepartments(); renderQuality(); renderReports(); updateOcrButton();
 }
 function loadedRegistryIds(){ return new Set(S.packages.filter(p=>p.match?.vndId).map(p=>p.match.vndId)); }
 function packageFor(vndId){ return S.packages.find(p=>p.match?.vndId===vndId || p.vndId===vndId); }
@@ -159,10 +159,56 @@ function renderRegistry(){ const rows=filteredRegistry();
 
 function setupUpload(){
   const dz=$('#dropZone'),inp=$('#fileInput'); ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag')})); ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag')}));
-  dz.addEventListener('drop',e=>ingestFiles([...e.dataTransfer.files])); inp.addEventListener('change',()=>ingestFiles([...inp.files])); $('#runAnalysisBtn').onclick=processAllPackages;
+  dz.addEventListener('drop',e=>ingestFiles([...e.dataTransfer.files])); inp.addEventListener('change',()=>ingestFiles([...inp.files])); $('#runAnalysisBtn').onclick=processAllPackages; $('#runPendingOcrBtn').onclick=runPendingOcr;
 }
-function roleFromName(name){ const n=name.toUpperCase(); if(/DRAFT/.test(n))return'DRAFT'; if(/ORDER|ПРИКАЗ/.test(n))return'ORDER'; if(/AMD\d*|ИЗМЕН/.test(n))return'AMD'; if(/APP\d*|ПРИЛОЖ/.test(n))return'APP'; if(/MAIN|ОСНОВ/.test(n))return'MAIN'; return'OTHER'; }
+function roleFromName(name){ const n=name.toUpperCase(); if(/DRAFT|ПРОЕКТ/.test(n))return'DRAFT'; if(/ORDER|ПРИКАЗ|РЕШЕНИЕ|ПРОТОКОЛ/.test(n))return'ORDER'; if(/AMD\d*|ИЗМЕН|ДОПОЛНЕН/.test(n))return'AMD'; if(/APP\d*|ПРИЛОЖ/.test(n))return'APP'; if(/MAIN|ОСНОВ/.test(n))return'MAIN'; return'OTHER'; }
 function langFromName(name){ const n=name.toUpperCase(); if(/(?:^|[_-])KZ(?:[_-]|\.)/.test(n))return'KZ';if(/(?:^|[_-])RU(?:[_-]|\.)/.test(n))return'RU';return''; }
+function roleLabel(role){return ({MAIN:'основной ВНД',ORDER:'акт утверждения',APP:'приложение',AMD:'изменение',DRAFT:'проект',OTHER:'не классифицирован'})[role]||role;}
+function inferRoleFromContent(f){
+  if(f.role!=='OTHER')return f.role;
+  const sample=norm((f.text||'').slice(0,2600)); if(!sample)return f.role;
+  if(/приказ/u.test(sample.slice(0,700)) || /решение/u.test(sample.slice(0,500))) return 'ORDER';
+  if(/приложение/u.test(sample.slice(0,500))) return 'APP';
+  if(/о внесении измен|внести измен|изменения и дополнения/u.test(sample.slice(0,900))) return 'AMD';
+  if(/проект/u.test(sample.slice(0,250))) return 'DRAFT';
+  return f.role;
+}
+function primaryScore(f,p,contentAware=false){
+  let s=0; const fn=norm(f.name), rec=p.match, role=f.role;
+  if(role==='MAIN')s+=100; if(role==='DRAFT')s-=8; if(role==='ORDER')s-=7; if(role==='APP')s-=5; if(role==='AMD')s-=4;
+  if(f.e==='pdf')s+=3; else if(f.e==='docx')s+=2.6; else if(['jpg','jpeg','png','tif','tiff','webp'].includes(f.e))s+=1.4; else if(f.e==='txt')s+=.8;
+  if(/подпис|signed|утвержден/u.test(fn))s+=1.4;
+  if(/положение|правил|регламент|инструкц|политик|методик|порядок|стандарт/u.test(fn))s+=2.2;
+  if(rec){
+    const tw=words(rec.title), fw=new Set(words(fn)); if(tw.length){const ov=tw.filter(x=>fw.has(x)).length/tw.length;s+=Math.min(5,ov*6);}
+    if(rec.type && fn.includes(norm(rec.type)))s+=1.5;
+  }
+  if(contentAware && f.text){
+    const sample=norm(f.text.slice(0,5000));
+    if(rec){const tw=words(rec.title), sw=new Set(words(sample)); if(tw.length){const ov=tw.filter(x=>sw.has(x)).length/tw.length;s+=Math.min(10,ov*11);} if(rec.type&&sample.includes(norm(rec.type)))s+=2;}
+    if(/приказ/u.test(sample.slice(0,600)) && role==='OTHER')s-=2.5;
+    if(/приложение/u.test(sample.slice(0,450)) && role==='OTHER')s-=1.8;
+    s+=Math.min(2,Math.log10(Math.max(10,(f.text||'').length))/2);
+  }
+  return s;
+}
+function detectPrimaryFiles(p,contentAware=false){
+  if(!p.files.length){p.primaryFiles=[];p.primaryConfidence=0;p.primarySource='none';return;}
+  if(p.primarySource==='manual' && p.primaryFiles?.length){for(const f of p.files)f.isPrimary=p.primaryFiles.includes(f.name);return;}
+  const explicit=p.files.filter(f=>f.role==='MAIN');
+  if(explicit.length){p.primaryFiles=explicit.map(f=>f.name);p.primaryConfidence=1;p.primarySource='explicit';for(const f of p.files)f.isPrimary=p.primaryFiles.includes(f.name);return;}
+  const scored=p.files.map(f=>({f,score:primaryScore(f,p,contentAware)})).sort((a,b)=>b.score-a.score);
+  const top=scored[0], second=scored[1]; if(!top){return;}
+  let selected=[top.f.name], source=contentAware?'auto-content':'auto-name';
+  // Если пакет фактически состоит из последовательности изображений без служебных ролей, считаем их единым основным сканом.
+  const imgs=p.files.filter(f=>['jpg','jpeg','png','tif','tiff','webp'].includes(f.e) && !['ORDER','APP','AMD','DRAFT'].includes(f.role));
+  const nonService=p.files.filter(f=>!['ORDER','APP','AMD','DRAFT'].includes(f.role));
+  if(imgs.length>=2 && nonService.length===imgs.length && imgs.length/p.files.length>=0.6){selected=imgs.map(f=>f.name);source='auto-image-series';}
+  const margin=top.score-(second?.score??-99); let conf=top.score>=9&&margin>=2?0.94:top.score>=6&&margin>=1.2?0.84:top.score>=4?0.72:0.55;
+  if(source==='auto-image-series')conf=Math.max(conf,0.78);
+  p.primaryFiles=selected;p.primaryConfidence=conf;p.primarySource=source;for(const f of p.files)f.isPrimary=selected.includes(f.name);
+}
+function setPrimaryManual(p,fileName){if(!p)return;const f=p.files.find(x=>x.name===fileName);if(!f)return;p.primaryFiles=[fileName];p.primaryConfidence=1;p.primarySource='manual';for(const x of p.files)x.isPrimary=x.name===fileName;buildQuality();renderAll();openPackage(p.key);toast(`Основным источником выбран ${fileName}`,'ok');}
 function mimeByExt(e){ return ({pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',tif:'image/tiff',tiff:'image/tiff',webp:'image/webp',txt:'text/plain'})[e]||'application/octet-stream'; }
 async function ingestFiles(files){
   if(!files.length)return; const max=S.cfg.limits.maxVndPackages; if(S.packages.length+files.length>max){toast(`Максимум ${max} объектов загрузки за сессию`,'warn');return;}
@@ -198,16 +244,19 @@ async function ingestZip(file){
   }catch(e){S.ingestErrors.push({level:'error',type:'ZIP',message:`${file.name}: ${e.message}`});}
 }
 async function addPackage(containerName,physicalFiles,isZip=false){
-  const m=containerName.match(/VND-\d{6}/i); const p={key:`PKG-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,containerName,isZip,vndId:m?m[0].toUpperCase():'',files:physicalFiles,match:null,matchConfidence:0,parsed:false,units:[],analysisStatus:'loaded',errors:[]}; S.packages.push(p);
+  const m=containerName.match(/VND-\d{6}/i); const p={key:`PKG-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,containerName,isZip,vndId:m?m[0].toUpperCase():'',files:physicalFiles,match:null,matchConfidence:0,parsed:false,units:[],analysisStatus:'loaded',errors:[],primaryFiles:[],primaryConfidence:0,primarySource:'none'}; S.packages.push(p);
 }
 function refreshMatches(){
-  for(const p of S.packages){ if(p.vndId){ const r=S.registry.find(x=>x.vndId===p.vndId); if(r){p.match=r;p.matchConfidence=1;continue;} }
-    const fn=norm(p.containerName); let best=null,score=0; for(const r of S.registry){ let s=0; if(r.number&&fn.includes(norm(r.number)))s+=.55; const wt=words(r.title),wf=new Set(words(fn)); if(wt.length){const ov=wt.filter(x=>wf.has(x)).length/wt.length;s+=Math.min(.45,ov*.65);} if(s>score){score=s;best=r;} } if(score>=.6){p.match=best;p.matchConfidence=Math.min(score,0.99);} }
+  for(const p of S.packages){
+    p.match=null;p.matchConfidence=0;
+    if(p.vndId){ const r=S.registry.find(x=>x.vndId===p.vndId); if(r){p.match=r;p.matchConfidence=1;detectPrimaryFiles(p,false);continue;} }
+    const fn=norm(p.containerName); let best=null,score=0; for(const r of S.registry){ let s=0; if(r.number&&fn.includes(norm(r.number)))s+=.55; const wt=words(r.title),wf=new Set(words(fn)); if(wt.length){const ov=wt.filter(x=>wf.has(x)).length/wt.length;s+=Math.min(.45,ov*.65);} if(s>score){score=s;best=r;} } if(score>=.6){p.match=best;p.matchConfidence=Math.min(score,0.99);} detectPrimaryFiles(p,false);
+  }
 }
 function renderPackages(){
   const phys=S.packages.reduce((a,p)=>a+p.files.length,0); $('#uploadSummary').textContent=`${S.packages.length} ВНД / ${phys} физических файлов`;
   if(!S.packages.length){$('#packageTable').innerHTML='<div class="empty"><strong>Пакеты не загружены</strong>Используйте VND-ID в имени ZIP для однозначного сопоставления.</div>';return;}
-  $('#packageTable').innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Пакет</th><th>Связь с реестром</th><th>Состав</th><th>Статус</th><th>Проблемы</th></tr></thead><tbody>${S.packages.map(p=>`<tr class="clickable" data-pkg="${p.key}"><td><b>${esc(p.containerName)}</b><br><span class="mono">${esc(p.vndId||'ID не указан')}</span></td><td>${p.match?`${esc(p.match.vndId)}<br><small>${esc(p.match.title)}</small><br><span class="badge ${p.matchConfidence>.94?'ok':'warn'}">${Math.round(p.matchConfidence*100)}%</span>`:'<span class="badge danger">не сопоставлен</span>'}</td><td>${p.files.length} файлов<br><small>${esc(uniq(p.files.map(f=>f.role)).join(', '))}</small></td><td><span class="badge ${p.parsed?'ok':p.analysisStatus==='processing'?'info':'warn'}">${esc(p.parsed?'анализ завершён':p.analysisStatus)}</span></td><td>${p.errors.length?`<span class="badge danger">${p.errors.length}</span>`:'—'}</td></tr>`).join('')}</tbody></table></div>`;
+  $('#packageTable').innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Пакет</th><th>Связь с реестром</th><th>Состав / основной источник</th><th>Статус</th><th>Проблемы</th></tr></thead><tbody>${S.packages.map(p=>`<tr class="clickable" data-pkg="${p.key}"><td><b>${esc(p.containerName)}</b><br><span class="mono">${esc(p.vndId||'ID не указан')}</span></td><td>${p.match?`${esc(p.match.vndId)}<br><small>${esc(p.match.title)}</small><br><span class="badge ${p.matchConfidence>.94?'ok':'warn'}">${Math.round(p.matchConfidence*100)}%</span>`:'<span class="badge danger">не сопоставлен</span>'}</td><td>${p.files.length} файлов<br><small>${esc(uniq(p.files.map(f=>roleLabel(f.role))).join(', '))}</small><br>${p.primaryFiles?.length?`<span class="badge ${p.primaryConfidence>=.8?'ok':'warn'}">основной: ${esc(p.primaryFiles.length===1?p.primaryFiles[0]:`${p.primaryFiles.length} страниц/файлов`)}</span> <small>${Math.round(p.primaryConfidence*100)}%</small>`:'<span class="badge warn">основной не определён</span>'}</td><td><span class="badge ${p.parsed?'ok':p.analysisStatus==='processing'?'info':'warn'}">${esc(p.parsed?'анализ завершён':p.analysisStatus)}</span></td><td>${p.errors.length?`<span class="badge danger">${p.errors.length}</span>`:'—'}</td></tr>`).join('')}</tbody></table></div>`;
   $('#packageTable').querySelectorAll('[data-pkg]').forEach(x=>x.onclick=()=>openPackage(x.dataset.pkg));
 }
 
@@ -216,19 +265,19 @@ async function processAllPackages(){
   S.issues=[];S.legalRefs=[];S.duplicates=[];S.conflicts=[];S.recommendations=[];S.ocrCount=0;
   let done=0; const total=S.packages.length;
   for(const p of S.packages){ p.analysisStatus='processing'; p.units=[]; p.errors=[]; renderPackages();
-    for(const f of p.files){ try{await parsePhysical(f); p.units.push(...unitsFromFile(f,p));}catch(e){f.parseStatus='error';f.parseError=e.message;p.errors.push(`${f.name}: ${e.message}`);} }
-    p.parsed=true;p.analysisStatus='done';done++; updateProgress(done,total,`Обработан ${p.containerName}`);
+    for(const f of p.files){ try{await parsePhysical(f); const inferred=inferRoleFromContent(f); if(f.role==='OTHER'&&inferred!=='OTHER')f.role=inferred; p.units.push(...unitsFromFile(f,p));}catch(e){f.parseStatus='error';f.parseError=e.message;p.errors.push(`${f.name}: ${e.message}`);} }
+    detectPrimaryFiles(p,true); p.parsed=true;p.analysisStatus='done';done++; updateProgress(done,total,`Обработан ${p.containerName}`);
   }
   runLocalAnalysis(); buildRecommendations(); buildQuality(); S.processing=false; $('#runAnalysisBtn').disabled=false; renderAll(); goPage('dashboard'); toast(`Анализ завершён: ${S.packages.length} ВНД, ${S.issues.length} замечаний-кандидатов`,'ok');
 }
 function updateProgress(done,total,text){ const pct=Math.round(done/total*100);$('#ingestBar').style.width=`${pct}%`;$('#ingestText').textContent=`${pct}% — ${text}`; }
 async function parsePhysical(f){
   f.parseStatus='processing'; const e=f.e;
-  if(e==='pdf') await parsePdf(f); else if(e==='docx') await parseDocx(f); else if(e==='xlsx'||e==='xls') await parseSheet(f); else if(e==='txt') await parseTxt(f); else if(['jpg','jpeg','png','tif','tiff','webp'].includes(e)) await parseImage(f); else if(e==='doc'){f.text='';f.pages=[];f.parseStatus='unsupported';return;}
+  if(e==='pdf') await parsePdf(f); else if(e==='docx') await parseDocx(f); else if(e==='xlsx'||e==='xls') await parseSheet(f); else if(e==='txt') await parseTxt(f); else if(['jpg','jpeg','png','tif','tiff','webp'].includes(e)) await parseImage(f); else if(e==='doc') await parseLegacyDoc(f);
   if(f.parseStatus==='processing') f.parseStatus='done';
 }
 async function parsePdf(f){
-  const ab=await f.blob.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:ab}).promise; const pages=[]; let ocrPending=false;
+  const ab=await f.blob.arrayBuffer(); const pdf=await pdfjsLib.getDocument({data:ab}).promise; const pages=[]; const pending=[];
   for(let i=1;i<=pdf.numPages;i++){
     const pg=await pdf.getPage(i),tc=await pg.getTextContent();
     const items=(tc.items||[]).filter(x=>x.str&&x.str.trim()).map(x=>({str:x.str,x:Number(x.transform?.[4]||0),y:Number(x.transform?.[5]||0)}));
@@ -239,24 +288,90 @@ async function parsePdf(f){
     let tx=lines.filter(Boolean).join('\n'),ocrConfidence=null;
     if(tx.replace(/\s/g,'').length<20 && S.cfg.analysis.autoOcrImages){
       if(S.ocrCount<S.cfg.limits.maxAutoOcrImages && window.Tesseract){
-        try{
-          S.ocrCount++; const vp=pg.getViewport({scale:1.6}),canvas=document.createElement('canvas');canvas.width=Math.ceil(vp.width);canvas.height=Math.ceil(vp.height);const ctx=canvas.getContext('2d',{willReadFrequently:true});await pg.render({canvasContext:ctx,viewport:vp}).promise;
-          let r;try{r=await Tesseract.recognize(canvas,'rus+kaz',{logger:()=>{}});}catch(e){r=await Tesseract.recognize(canvas,'rus',{logger:()=>{}});}tx=r.data.text||'';ocrConfidence=r.data.confidence||0;
-        }catch(e){ocrPending=true;}
-      }else ocrPending=true;
+        try{ S.ocrCount++; const r=await ocrPdfPage(pg); tx=r.text; ocrConfidence=r.confidence; }
+        catch(e){ pending.push(i); }
+      }else pending.push(i);
     }
-    pages.push({number:i,text:tx,ocrConfidence});
+    pages.push({number:i,text:tx,ocrConfidence,ocrPending:pending.includes(i)});
   }
-  f.pages=pages;f.text=pages.map(p=>p.text).join('\n');if(ocrPending)f.parseStatus='ocr-pending';
+  f.pages=pages; f.ocrPendingPages=pending; f.text=pages.map(p=>p.text).join('\n'); if(pending.length)f.parseStatus='ocr-pending';
+}
+async function recognizeOcr(source){
+  if(!window.Tesseract) throw new Error('OCR-библиотека недоступна');
+  try{const r=await Tesseract.recognize(source,'rus+kaz',{logger:()=>{}});return {text:r.data.text||'',confidence:r.data.confidence||0};}
+  catch(e){const r=await Tesseract.recognize(source,'rus',{logger:()=>{}});return {text:r.data.text||'',confidence:r.data.confidence||0};}
+}
+async function ocrPdfPage(pg){
+  const vp=pg.getViewport({scale:1.75}),canvas=document.createElement('canvas'); canvas.width=Math.ceil(vp.width);canvas.height=Math.ceil(vp.height);
+  const ctx=canvas.getContext('2d',{willReadFrequently:true}); await pg.render({canvasContext:ctx,viewport:vp}).promise; return recognizeOcr(canvas);
 }
 async function parseDocx(f){ const ab=await f.blob.arrayBuffer(); const [raw,html]=await Promise.all([mammoth.extractRawText({arrayBuffer:ab}),mammoth.convertToHtml({arrayBuffer:ab})]);f.text=raw.value||'';f.html=html.value||'';f.pages=[{number:null,text:f.text}]; }
 async function parseSheet(f){ const ab=await f.blob.arrayBuffer(); const wb=XLSX.read(ab,{type:'array'}); const pages=[]; for(const sn of wb.SheetNames){ const csv=XLSX.utils.sheet_to_csv(wb.Sheets[sn]);pages.push({number:null,label:sn,text:csv}); }f.pages=pages;f.text=pages.map(p=>`[${p.label}]\n${p.text}`).join('\n'); }
 async function parseTxt(f){f.text=await f.blob.text();f.pages=[{number:null,text:f.text}];}
 async function parseImage(f){
-  if(!S.cfg.analysis.autoOcrImages || S.ocrCount>=S.cfg.limits.maxAutoOcrImages){f.text='';f.pages=[{number:null,text:''}];f.parseStatus='ocr-pending';return;}
-  S.ocrCount++; if(!window.Tesseract)throw new Error('OCR-библиотека недоступна');
-  try{const r=await Tesseract.recognize(f.blob,'rus+kaz',{logger:()=>{}});f.text=r.data.text||'';f.pages=[{number:pageNumFromName(f.name),text:f.text,ocrConfidence:r.data.confidence||0}];}catch(e){const r=await Tesseract.recognize(f.blob,'rus',{logger:()=>{}});f.text=r.data.text||'';f.pages=[{number:pageNumFromName(f.name),text:f.text,ocrConfidence:r.data.confidence||0}];}
+  if(!S.cfg.analysis.autoOcrImages || S.ocrCount>=S.cfg.limits.maxAutoOcrImages){f.text='';f.pages=[{number:pageNumFromName(f.name),text:'',ocrPending:true}];f.ocrPendingImage=true;f.parseStatus='ocr-pending';return;}
+  S.ocrCount++; const r=await recognizeOcr(f.blob); f.text=r.text; f.pages=[{number:pageNumFromName(f.name),text:f.text,ocrConfidence:r.confidence,ocrPending:false}]; f.ocrPendingImage=false;
 }
+async function parseLegacyDoc(f){
+  const ab=await f.blob.arrayBuffer(), bytes=new Uint8Array(ab); let text='', method='';
+  const asciiHead=new TextDecoder('windows-1251',{fatal:false}).decode(bytes.slice(0,64));
+  if(/\{\\rtf/i.test(asciiHead)){
+    const raw=new TextDecoder('windows-1251',{fatal:false}).decode(bytes); text=stripRtf(raw); method='RTF/DOC';
+  }else{
+    const a=extractLegacyRuns(bytes,'windows-1251'), u=extractUtf16Runs(bytes); text=mergeLegacyText(a,u); method='binary DOC';
+  }
+  f.text=text.trim(); f.pages=[{number:null,text:f.text}]; f.legacyDocMethod=method;
+  if(f.text.length>=80){f.parseStatus='legacy-doc-partial';}
+  else {f.parseStatus='doc-unreadable'; f.parseError='Текст старого DOC не удалось надёжно извлечь локально.';}
+}
+function stripRtf(raw){
+  return raw.replace(/\\par[d]?\b/gi,'\n').replace(/\\tab\b/gi,'\t').replace(/\\'[0-9a-f]{2}/gi,m=>{try{return new TextDecoder('windows-1251').decode(Uint8Array.from([parseInt(m.slice(2),16)]));}catch(e){return ' ';}}).replace(/\\u(-?\d+)\??/gi,(_,n)=>String.fromCharCode(Number(n)<0?Number(n)+65536:Number(n))).replace(/\\[a-z]+-?\d* ?/gi,'').replace(/[{}]/g,' ').replace(/\s+\n/g,'\n').replace(/\n\s+/g,'\n').replace(/[ \t]{2,}/g,' ').trim();
+}
+function extractLegacyRuns(bytes,encoding){
+  const ok=b=>b===9||b===10||b===13||(b>=32&&b<=126)||b===160||b===168||b===184||(b>=192&&b<=255); const out=[];let start=-1;
+  const flush=i=>{if(start<0)return;const chunk=bytes.slice(start,i);start=-1;if(chunk.length<16)return;let t='';try{t=new TextDecoder(encoding,{fatal:false}).decode(chunk);}catch(e){return;}t=t.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]+/g,' ').replace(/\s+/g,' ').trim();const letters=(t.match(/[A-Za-zА-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/g)||[]).length;if(t.length>=12&&letters>=6&&letters/Math.max(1,t.length)>.22)out.push(t);};
+  for(let i=0;i<=bytes.length;i++){const good=i<bytes.length&&ok(bytes[i]);if(good&&start<0)start=i;if(!good&&start>=0)flush(i);} return out;
+}
+function extractUtf16Runs(bytes){
+  const out=[]; let chars=[]; const useful=c=>c===9||c===10||c===13||c===32||(c>=33&&c<=126)||(c>=0x400&&c<=0x52f)||(c>=0x00a0&&c<=0x00ff);
+  const flush=()=>{if(chars.length>=8){let t=String.fromCharCode(...chars).replace(/\s+/g,' ').trim();const letters=(t.match(/[A-Za-zА-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/g)||[]).length;if(t.length>=12&&letters>=6&&letters/Math.max(1,t.length)>.22)out.push(t);}chars=[];};
+  for(let i=0;i+1<bytes.length;i+=2){const c=bytes[i]|(bytes[i+1]<<8);if(useful(c))chars.push(c);else flush();}flush();return out;
+}
+function mergeLegacyText(a,u){
+  const all=[...a,...u].map(x=>x.trim()).filter(Boolean), seen=new Set(), out=[]; for(const t of all){const k=norm(t);if(k.length<8||seen.has(k))continue;seen.add(k);out.push(t);} return out.join('\n');
+}
+
+function pendingOcrTasks(){
+  const tasks=[]; for(const p of S.packages)for(const f of p.files){if(f.e==='pdf'&&f.ocrPendingPages?.length)for(const page of f.ocrPendingPages)tasks.push({p,f,page,type:'pdf'});else if(['jpg','jpeg','png','tif','tiff','webp'].includes(f.e)&&f.ocrPendingImage)tasks.push({p,f,page:f.pages?.[0]?.number||null,type:'image'});} return tasks;
+}
+function updateOcrButton(){
+  const b=$('#runPendingOcrBtn'); if(!b)return; const n=pendingOcrTasks().length; b.disabled=S.processing||n===0; b.textContent=n?`OCR: распознать ожидающие (${n})`:'OCR: нет ожидающих';
+}
+async function runPendingOcr(){
+  if(S.processing)return; const tasks=pendingOcrTasks(), max=Number(S.cfg.limits.maxManualOcrPages||1200); if(!tasks.length){toast('Ожидающих OCR страниц нет','ok');return;}
+  if(tasks.length>max){toast(`Ожидает ${tasks.length} страниц; за один запуск разрешено до ${max}. Остальные останутся в очереди.`,'warn');}
+  const selected=tasks.slice(0,max); if(selected.length>80&&!confirm(`Запустить OCR для ${selected.length} страниц/изображений? Обработка идёт последовательно и может заметно нагружать компьютер.`))return;
+  S.processing=true; $('#runAnalysisBtn').disabled=true; $('#runPendingOcrBtn').disabled=true; $('#ingestProgress').classList.remove('hidden'); let done=0;
+  const byFile=new Map(); for(const t of selected){if(!byFile.has(t.f))byFile.set(t.f,[]);byFile.get(t.f).push(t);}
+  for(const [f,fts] of byFile){
+    try{
+      if(f.e==='pdf'){
+        const ab=await f.blob.arrayBuffer(),pdf=await pdfjsLib.getDocument({data:ab}).promise;
+        for(const t of fts){const pg=await pdf.getPage(t.page);const r=await ocrPdfPage(pg);const rec=f.pages.find(x=>x.number===t.page);if(rec){rec.text=r.text;rec.ocrConfidence=r.confidence;rec.ocrPending=false;}f.ocrPendingPages=(f.ocrPendingPages||[]).filter(x=>x!==t.page);done++;updateProgress(done,selected.length,`${f.name} · стр. ${t.page}`);await new Promise(r=>setTimeout(r,0));}
+        f.text=f.pages.map(x=>x.text||'').join('\n');f.parseStatus=f.ocrPendingPages.length?'ocr-pending':'done';
+      }else{
+        const r=await recognizeOcr(f.blob);f.text=r.text;f.pages=[{number:pageNumFromName(f.name),text:f.text,ocrConfidence:r.confidence,ocrPending:false}];f.ocrPendingImage=false;f.parseStatus='done';done++;updateProgress(done,selected.length,f.name);await new Promise(r=>setTimeout(r,0));
+      }
+    }catch(e){f.parseStatus='ocr-pending';f.parseError=`OCR: ${e.message}`;}
+  }
+  rebuildAnalysisFromParsedFiles(); S.processing=false; $('#runAnalysisBtn').disabled=false; updateOcrButton(); renderAll(); toast(`OCR завершён: обработано ${done} из ${selected.length}`,'ok');
+}
+function rebuildAnalysisFromParsedFiles(){
+  S.issues=[];S.legalRefs=[];S.duplicates=[];S.conflicts=[];S.recommendations=[];
+  for(const p of S.packages){p.units=[];for(const f of p.files)p.units.push(...unitsFromFile(f,p));detectPrimaryFiles(p,true);}
+  runLocalAnalysis();buildRecommendations();buildQuality();
+}
+
 function pageNumFromName(n){const m=n.match(/P(\d{1,4})/i);return m?Number(m[1]):null;}
 function unitsFromFile(f,p){ const units=[]; for(const pg of f.pages||[]){ const text=pg.text||''; if(!text.trim())continue; const lines=text.replace(/\r/g,'\n').split(/\n+|(?<=\.)\s{2,}/).map(x=>x.trim()).filter(Boolean); let cur=null; const flush=()=>{if(cur&&cur.text.length>20){cur.normText=norm(cur.text);cur.tokens=uniq(words(cur.text));units.push(cur);}cur=null;};
     for(const line of lines){ const m=line.match(/^((?:\d{1,3}\.){0,5}\d{1,3})[.)]?\s+(.{3,})$/); if(m){flush();cur={id:`U-${p.key}-${f.name}-${pg.number||0}-${units.length}`,vndId:p.match?.vndId||p.vndId||p.key,packageKey:p.key,sourceFile:f.name,page:pg.number,point:m[1],text:m[2],file:f};} else { if(!cur)cur={id:`U-${p.key}-${f.name}-${pg.number||0}-${units.length}`,vndId:p.match?.vndId||p.vndId||p.key,packageKey:p.key,sourceFile:f.name,page:pg.number,point:'',text:'',file:f}; cur.text+=(cur.text?' ':'')+line; if(cur.text.length>1600)flush(); }
@@ -308,7 +423,7 @@ function buildRecommendations(){ const map=new Map(); const recText={PM01:'Ус�
   for(const i of S.issues){const r=S.registry.find(x=>x.vndId===i.vndId);const dep=r?.department||'Не определено';const key=`${dep}|${i.categoryId}`;if(!map.has(key))map.set(key,{id:`REC-${map.size+1}`,department:dep,categoryId:i.categoryId,title:recText[i.categoryId]||'Провести актуализацию.',issueIds:[],vndIds:new Set(),priority:i.severity==='high'?'high':'medium'});const x=map.get(key);x.issueIds.push(i.id);x.vndIds.add(i.vndId);if(i.severity==='high')x.priority='high';}
   S.recommendations=[...map.values()].map(x=>({...x,vndIds:[...x.vndIds]})); }
 function buildQuality(){ const q=[...S.ingestErrors]; for(const r of S.registry)if(r.idTemporary)q.push({level:'warn',type:'VND_ID',message:`${r.title}: отсутствует постоянный VND_ID в реестре.`});
-  for(const p of S.packages){if(!p.match)q.push({level:'error',type:'Сопоставление',message:`${p.containerName}: пакет не связан однозначно с реестром.`});if(!p.files.length)q.push({level:'error',type:'Состав пакета',message:`${p.containerName}: архив не содержит поддерживаемых документов.`});if(p.isZip&&p.files.length&&!p.files.some(f=>f.role==='MAIN'))q.push({level:'warn',type:'Состав пакета',message:`${p.containerName}: основной файл не помечен кодом MAIN. Анализ выполнится, но приоритет источника нельзя определить однозначно.`});for(const f of p.files){if(f.e==='doc')q.push({level:'warn',type:'DOC',message:`${f.name}: старый DOC локально не извлекается; рекомендуется DOCX/PDF.`});if(f.parseStatus==='ocr-pending')q.push({level:'warn',type:'OCR',message:`${f.name}: OCR не запущен из-за лимита автоматического распознавания.`});const oc=f.pages?.find(x=>x.ocrConfidence!=null)?.ocrConfidence;if(oc!=null&&oc<60)q.push({level:'warn',type:'OCR',message:`${f.name}: низкая уверенность OCR (${Math.round(oc)}%); выводы по этому фрагменту требуют проверки оригинала.`});if(f.parseStatus==='error')q.push({level:'error',type:'Чтение файла',message:`${f.name}: ${f.parseError}`});}}
+  for(const p of S.packages){if(!p.match)q.push({level:'error',type:'Сопоставление',message:`${p.containerName}: пакет не связан однозначно с реестром.`});if(!p.files.length)q.push({level:'error',type:'Состав пакета',message:`${p.containerName}: архив не содержит поддерживаемых документов.`});if(p.files.length&&!p.primaryFiles?.length)q.push({level:'warn',type:'Основной источник',message:`${p.containerName}: основной источник не определён автоматически. Откройте пакет и выберите файл вручную.`});else if(p.primaryFiles?.length&&p.primaryConfidence<.72)q.push({level:'warn',type:'Основной источник',message:`${p.containerName}: основной источник определён с низкой уверенностью (${Math.round(p.primaryConfidence*100)}%). Рекомендуется проверить выбор.`});for(const f of p.files){if(f.e==='doc'&&f.parseStatus==='legacy-doc-partial')q.push({level:'warn',type:'DOC',message:`${f.name}: текст старого DOC извлечён локально методом best-effort (${f.legacyDocMethod||'binary'}); критические выводы рекомендуется сверять с оригиналом.`});if(f.e==='doc'&&f.parseStatus==='doc-unreadable')q.push({level:'error',type:'DOC',message:`${f.name}: старый DOC не удалось надёжно прочитать локально. Используйте исходный просмотр/конвертацию только для этого файла.`});if(f.parseStatus==='ocr-pending')q.push({level:'warn',type:'OCR',message:`${f.name}: часть страниц ожидает OCR. Нажмите «OCR: распознать ожидающие» — они будут обработаны локальной очередью с прогрессом.`});const oc=f.pages?.find(x=>x.ocrConfidence!=null)?.ocrConfidence;if(oc!=null&&oc<60)q.push({level:'warn',type:'OCR',message:`${f.name}: низкая уверенность OCR (${Math.round(oc)}%); выводы по этому фрагменту требуют проверки оригинала.`});if(f.parseStatus==='error')q.push({level:'error',type:'Чтение файла',message:`${f.name}: ${f.parseError}`});}}
   const dup=Object.entries(S.packages.reduce((m,p)=>(p.vndId&&(m[p.vndId]=(m[p.vndId]||0)+1),m),{})).filter(([,n])=>n>1);for(const [id,n] of dup)q.push({level:'error',type:'Дубли пакетов',message:`${id}: загружено ${n} пакета.`});S.quality=q; }
 
 function renderMonitoring(){ renderCategoryCards('#monitoringCategories'); const arr=S.issueFilter?S.issues.filter(i=>i.categoryId===S.issueFilter):S.issues;$('#issuesMeta').textContent=S.issueFilter?`${categoryName(S.issueFilter)} — ${arr.length}`:`Всего ${arr.length}`;$('#issuesTable').innerHTML=arr.length?issueTable(arr):'<div class="empty"><strong>Замечаний нет</strong>Загрузите документы или измените фильтр.</div>';$('#issuesTable').querySelectorAll('[data-issue]').forEach(x=>x.onclick=()=>openIssue(x.dataset.issue));}
@@ -320,15 +435,15 @@ function renderLegalRefs(){ const rows=S.legalRefs;$('#legalRefsTable').innerHTM
 async function verifyLegal(){ if(!S.legalRefs.length){toast('Сначала проанализируйте документы','warn');return;}const ep=S.cfg.legalVerification.endpoint;if(!ep){toast('Защищённый Legal Verification endpoint не настроен. Полный текст ВНД в Интернет не отправляется.','warn');return;} try{const payload={references:S.legalRefs.map(r=>({id:r.id,raw:r.raw}))};const res=await fetch(ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!res.ok)throw new Error(`HTTP ${res.status}`);const data=await res.json();for(const x of data.results||[]){const r=S.legalRefs.find(z=>z.id===x.id);if(r){r.status=x.status||'проверено';r.details=x;}}renderLegalRefs();toast('Проверка НПА завершена','ok');}catch(e){toast(`Ошибка внешней проверки: ${e.message}`,'error');}}
 
 function renderDepartments(){ const depNames=uniq(S.registry.map(r=>r.department)).sort((a,b)=>a.localeCompare(b,'ru')); $('#departmentsGrid').innerHTML=depNames.map(dep=>{const docs=S.registry.filter(r=>r.department===dep),ids=new Set(docs.map(r=>r.vndId)),iss=S.issues.filter(i=>ids.has(i.vndId)),recs=S.recommendations.filter(r=>r.department===dep);return `<div class="panel clickable" data-dep="${esc(dep)}"><div class="panel-title"><h4>${esc(dep)}</h4><span class="meta">${docs.length} ВНД</span></div><div class="stat-line"><div class="stat-pill"><b>${iss.length}</b>замечаний</div><div class="stat-pill"><b>${recs.length}</b>рекомендаций</div><div class="stat-pill"><b>${iss.filter(i=>i.categoryId==='PM02').length}</b>противоречий</div><div class="stat-pill"><b>${iss.filter(i=>i.categoryId==='PM05').length}</b>дублей</div></div></div>`}).join('')||'<div class="empty">Структура не загружена.</div>';$('#departmentsGrid').querySelectorAll('[data-dep]').forEach(x=>x.onclick=()=>openDepartment(x.dataset.dep));}
-function renderQuality(){const err=S.quality.filter(x=>x.level==='error').length,warn=S.quality.filter(x=>x.level==='warn').length,unmatched=S.packages.filter(p=>!p.match).length,missing=S.registry.length-loadedRegistryIds().size;const cards=[['Ошибки',err,'danger'],['Предупреждения',warn,'warn'],['Не сопоставлено пакетов',unmatched,unmatched?'danger':'ok'],['ВНД реестра не загружено',Math.max(0,missing),''],['Временных ID',S.registry.filter(r=>r.idTemporary).length,'warn'],['OCR ожидает',S.packages.flatMap(p=>p.files).filter(f=>f.parseStatus==='ocr-pending').length,'warn']];$('#qualityKpis').innerHTML=cards.map(c=>`<div class="kpi-card ${c[2]}"><div class="label">${c[0]}</div><div class="value">${c[1]}</div></div>`).join('');$('#qualityTable').innerHTML=S.quality.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Уровень</th><th>Тип</th><th>Сообщение</th></tr></thead><tbody>${S.quality.map(q=>`<tr><td>${q.level==='error'?'<span class="badge danger">ошибка</span>':'<span class="badge warn">предупреждение</span>'}</td><td>${esc(q.type)}</td><td>${esc(q.message)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty"><strong>Критических проблем данных нет</strong></div>';}
+function renderQuality(){const err=S.quality.filter(x=>x.level==='error').length,warn=S.quality.filter(x=>x.level==='warn').length,unmatched=S.packages.filter(p=>!p.match).length,missing=S.registry.length-loadedRegistryIds().size;const cards=[['Ошибки',err,'danger'],['Предупреждения',warn,'warn'],['Не сопоставлено пакетов',unmatched,unmatched?'danger':'ok'],['ВНД реестра не загружено',Math.max(0,missing),''],['Временных ID',S.registry.filter(r=>r.idTemporary).length,'warn'],['OCR ожидает (страниц)',pendingOcrTasks().length,'warn']];$('#qualityKpis').innerHTML=cards.map(c=>`<div class="kpi-card ${c[2]}"><div class="label">${c[0]}</div><div class="value">${c[1]}</div></div>`).join('');$('#qualityTable').innerHTML=S.quality.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Уровень</th><th>Тип</th><th>Сообщение</th></tr></thead><tbody>${S.quality.map(q=>`<tr><td>${q.level==='error'?'<span class="badge danger">ошибка</span>':'<span class="badge warn">предупреждение</span>'}</td><td>${esc(q.type)}</td><td>${esc(q.message)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty"><strong>Критических проблем данных нет</strong></div>';}
 function renderReports(){const confirmed=S.issues.filter(i=>i.reviewStatus==='confirmed').length;$('#reportPreview').innerHTML=`<div class="stat-line"><div class="stat-pill"><b>${S.packages.length}</b>ВНД загружено</div><div class="stat-pill"><b>${S.packages.filter(p=>p.parsed).length}</b>проанализировано</div><div class="stat-pill"><b>${S.issues.length}</b>замечаний-кандидатов</div><div class="stat-pill"><b>${confirmed}</b>подтверждено</div><div class="stat-pill"><b>${S.recommendations.length}</b>рекомендаций СП</div></div><div class="footer-note">Методика: ${esc(S.version?.methodology||'NORMATRIX')}. Выводы локального движка требуют профессиональной проверки перед использованием как официального правового заключения.</div>`;}
 
 function openModal(title){$('#modalTitle').textContent=title;$('#detailModal').classList.add('open');}
 function closeModal(){$('#detailModal').classList.remove('open');}
-function openVnd(id){const r=S.registry.find(x=>x.vndId===id);if(!r)return;const p=packageFor(id),iss=issuesFor(id),refs=S.legalRefs.filter(x=>x.occurrences.some(o=>o.vndId===id));openModal(`${id} — ${r.title}`);$('#modalSide').innerHTML=`<div class="detail-list"><div class="detail-item"><div class="k">Подразделение</div><div class="v">${esc(r.department)}</div></div><div class="detail-item"><div class="k">Ответственный</div><div class="v">${esc(r.responsible)}</div></div><div class="detail-item"><div class="k">№ / дата</div><div class="v">${esc(r.number)} · ${esc(fmtDate(r.date))}</div></div><div class="detail-item"><div class="k">Статус</div><div class="v">${esc(statusDerived(r))}</div></div></div>${p?'<hr>'+p.files.map(f=>`<div class="file-row" data-view-file="${esc(f.name)}">${esc(f.name)}<br><small>${esc(f.role)} ${esc(f.lang)}</small></div>`).join(''):''}`;
+function openVnd(id){const r=S.registry.find(x=>x.vndId===id);if(!r)return;const p=packageFor(id),iss=issuesFor(id),refs=S.legalRefs.filter(x=>x.occurrences.some(o=>o.vndId===id));openModal(`${id} — ${r.title}`);$('#modalSide').innerHTML=`<div class="detail-list"><div class="detail-item"><div class="k">Подразделение</div><div class="v">${esc(r.department)}</div></div><div class="detail-item"><div class="k">Ответственный</div><div class="v">${esc(r.responsible)}</div></div><div class="detail-item"><div class="k">№ / дата</div><div class="v">${esc(r.number)} · ${esc(fmtDate(r.date))}</div></div><div class="detail-item"><div class="k">Статус</div><div class="v">${esc(statusDerived(r))}</div></div></div>${p?'<hr>'+p.files.map(f=>`<div class="file-row ${f.isPrimary?'active':''}" data-view-file="${esc(f.name)}">${f.isPrimary?'<span class="badge ok">основной</span> ':''}${esc(f.name)}<br><small>${esc(roleLabel(f.role))} ${esc(f.lang)}</small></div>`).join(''):''}`;
   $('#modalMain').innerHTML=`<div class="grid kpi" style="grid-template-columns:repeat(4,1fr)"><div class="kpi-card"><div class="label">Пунктов/фрагментов</div><div class="value">${p?.units?.length||0}</div></div><div class="kpi-card warn"><div class="label">Замечаний</div><div class="value">${iss.length}</div></div><div class="kpi-card"><div class="label">НПА</div><div class="value">${refs.length}</div></div><div class="kpi-card"><div class="label">Файлов</div><div class="value">${p?.files?.length||0}</div></div></div><h4>Замечания</h4>${iss.length?issueTable(iss,true):'<div class="empty">Замечаний по этому ВНД нет.</div>'}<h4>Извлечённые нормативные ссылки</h4>${refs.length?refs.map(x=>`<div class="detail-item">${esc(x.raw)} — <span class="badge warn">${esc(x.status)}</span></div>`).join(''):'<div class="empty">Не найдено.</div>'}`;
   $('#modalMain').querySelectorAll('[data-issue]').forEach(x=>x.onclick=()=>openIssue(x.dataset.issue));$('#modalSide').querySelectorAll('[data-view-file]').forEach(x=>x.onclick=()=>viewFile(p,x.dataset.viewFile,null,''));}
-function openPackage(key){const p=S.packages.find(x=>x.key===key);if(!p)return;openModal(p.containerName);$('#modalSide').innerHTML=p.files.map(f=>`<div class="file-row" data-view-file="${esc(f.name)}">${esc(f.name)}<br><small>${esc(f.role)} · ${esc(f.parseStatus)}</small></div>`).join('');$('#modalMain').innerHTML=`<h3>${esc(p.match?.title||'Пакет не сопоставлен')}</h3><div class="detail-list"><div class="detail-item"><div class="k">VND_ID</div><div class="v mono">${esc(p.match?.vndId||p.vndId||'—')}</div></div><div class="detail-item"><div class="k">Точность сопоставления</div><div class="v">${Math.round(p.matchConfidence*100)}%</div></div><div class="detail-item"><div class="k">Извлечено норм/фрагментов</div><div class="v">${p.units.length}</div></div></div>`;$('#modalSide').querySelectorAll('[data-view-file]').forEach(x=>x.onclick=()=>viewFile(p,x.dataset.viewFile,null,''));}
+function openPackage(key){const p=S.packages.find(x=>x.key===key);if(!p)return;openModal(p.containerName);$('#modalSide').innerHTML=p.files.map(f=>`<div class="file-row ${f.isPrimary?'active':''}" data-view-file="${esc(f.name)}">${f.isPrimary?'<span class="badge ok">основной</span> ':''}${esc(f.name)}<br><small>${esc(roleLabel(f.role))} · ${esc(f.parseStatus)}</small><br><button class="btn sm" data-set-primary="${esc(f.name)}">Сделать основным</button></div>`).join('');$('#modalMain').innerHTML=`<h3>${esc(p.match?.title||'Пакет не сопоставлен')}</h3><div class="detail-list"><div class="detail-item"><div class="k">VND_ID</div><div class="v mono">${esc(p.match?.vndId||p.vndId||'—')}</div></div><div class="detail-item"><div class="k">Точность сопоставления</div><div class="v">${Math.round(p.matchConfidence*100)}%</div></div><div class="detail-item"><div class="k">Основной источник</div><div class="v">${p.primaryFiles?.length?`${esc(p.primaryFiles.join(', '))}<br><small>${p.primarySource==='manual'?'выбран вручную':p.primarySource==='explicit'?'помечен MAIN':'определён автоматически'} · ${Math.round(p.primaryConfidence*100)}%</small>`:'Не определён'}</div></div><div class="detail-item"><div class="k">Извлечено норм/фрагментов</div><div class="v">${p.units.length}</div></div></div><div class="callout"><b>MAIN больше не обязателен.</b><br>Портал определяет основной источник по имени, типу, содержимому и совпадению с карточкой ВНД. Если выбор неверен, используйте кнопку «Сделать основным».</div>`;$('#modalSide').querySelectorAll('[data-view-file]').forEach(x=>x.onclick=e=>{if(e.target.closest('[data-set-primary]'))return;viewFile(p,x.dataset.viewFile,null,'');});$('#modalSide').querySelectorAll('[data-set-primary]').forEach(x=>x.onclick=e=>{e.stopPropagation();setPrimaryManual(p,x.dataset.setPrimary);});}
 function openIssue(id){
   const i=S.issues.find(x=>x.id===id); if(!i)return;
   openModal(`${i.id} — ${categoryName(i.categoryId)}`);
@@ -356,7 +471,7 @@ function exportXlsx(){if(!window.XLSX){toast('Библиотека XLSX недо
 function exportJson(){const data={generatedAt:nowIso(),version:S.version,coverage:{registry:S.registry.length,loaded:S.packages.length},issues:S.issues.map(({_key,...x})=>x),legalRefs:S.legalRefs,recommendations:S.recommendations,quality:S.quality};downloadBlob(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),`NORMATRIX_VND_${new Date().toISOString().slice(0,10)}.json`);}
 function downloadBlob(blob,name){const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 function printReport(){const w=window.open('','_blank');if(!w)return;w.document.write(`<html><head><meta charset="utf-8"><title>NORMATRIX report</title><style>body{font-family:Arial;padding:30px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px;font-size:12px}h1{color:#17324d}</style></head><body><h1>NORMATRIX VND Analytics</h1><p>Дата: ${new Date().toLocaleString('ru-RU')}</p><p>Загружено ВНД: ${S.packages.length}; замечаний: ${S.issues.length}; подтверждено: ${S.issues.filter(i=>i.reviewStatus==='confirmed').length}</p><h2>Замечания</h2><table><tr><th>ID</th><th>Категория</th><th>ВНД / пункт</th><th>Суть</th><th>Рекомендация</th></tr>${S.issues.map(i=>`<tr><td>${i.id}</td><td>${esc(categoryName(i.categoryId))}</td><td>${esc(i.vndId)} ${i.point?`п.${esc(i.point)}`:''}</td><td>${esc(i.issue)}</td><td>${esc(i.recommendation)}</td></tr>`).join('')}</table></body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),300);}
-function clearSession(){if(!confirm('Удалить все загруженные ВНД и результаты текущей сессии? Корневой реестр и структура останутся.'))return;for(const u of S.objectUrls)URL.revokeObjectURL(u);S.objectUrls.clear();S.packages=[];S.issues=[];S.legalRefs=[];S.duplicates=[];S.conflicts=[];S.quality=[];S.ingestErrors=[];S.recommendations=[];S.issueFilter='';$('#fileInput').value='';$('#runAnalysisBtn').disabled=true;renderAll();goPage('dashboard');toast('Сессия очищена','ok');}
+function clearSession(){if(!confirm('Удалить все загруженные ВНД и результаты текущей сессии? Корневой реестр и структура останутся.'))return;for(const u of S.objectUrls)URL.revokeObjectURL(u);S.objectUrls.clear();S.packages=[];S.issues=[];S.legalRefs=[];S.duplicates=[];S.conflicts=[];S.quality=[];S.ingestErrors=[];S.recommendations=[];S.issueFilter='';$('#fileInput').value='';$('#runAnalysisBtn').disabled=true;$('#runPendingOcrBtn').disabled=true;renderAll();goPage('dashboard');toast('Сессия очищена','ok');}
 
 function bindStaticActions(){ $('#modalClose').onclick=closeModal;$('#detailModal').addEventListener('click',e=>{if(e.target.id==='detailModal')closeModal();});$('#clearSessionBtn').onclick=clearSession;$('#verifyLegalBtn').onclick=verifyLegal;$('#exportXlsxBtn').onclick=exportXlsx;$('#exportJsonBtn').onclick=exportJson;$('#printReportBtn').onclick=printReport;window.addEventListener('beforeunload',()=>{for(const u of S.objectUrls)URL.revokeObjectURL(u);}); }
 function checkRuntimeDependencies(){

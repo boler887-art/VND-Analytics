@@ -28,7 +28,7 @@
       <button data-page="quality">✓ Качество данных</button>
       <button data-page="reports">⇩ Отчёты</button>
     </nav>
-    <div class="side-footer">NORMATRIX v1.0.1<br>Реестр и структура читаются из корня сайта автоматически.</div>
+    <div class="side-footer">NORMATRIX v1.0.3<br>Реестр и структура читаются из корня сайта автоматически.</div>
   </aside>
 
   <main class="main">
@@ -62,8 +62,8 @@
         <div class="panel">
           <div class="upload-zone" id="dropZone">
             <div class="big">Перетащите 1–300 ВНД или выберите файлы</div>
-            <p>PDF, DOCX, XLSX, XLS, TXT, JPG/JPEG, PNG, TIFF, WEBP, ZIP. Старый DOC учитывается в составе пакета, но для анализа текста рекомендуется конвертация в DOCX/PDF. В одном ZIP могут находиться основной текст, приказ, приложения, изменения и изображения страниц.</p>
-            <div class="upload-actions"><label class="btn primary" for="fileInput">Выбрать файлы</label><button class="btn" id="runAnalysisBtn" disabled>Запустить / повторить анализ</button></div>
+            <p>PDF, DOC/DOCX, XLS/XLSX, TXT, JPG/JPEG, PNG, TIFF, WEBP, ZIP. Старый бинарный DOC портал пытается извлечь локально без отправки файла наружу. Для сканов действует безопасный автоматический OCR, а оставшиеся страницы можно дораспознать вручную очередью. В одном ZIP могут находиться основной текст, приказ, приложения, изменения и изображения страниц.</p>
+            <div class="upload-actions"><label class="btn primary" for="fileInput">Выбрать файлы</label><button class="btn" id="runAnalysisBtn" disabled>Запустить / повторить анализ</button><button class="btn" id="runPendingOcrBtn" disabled>OCR: распознать ожидающие</button></div>
             <input id="fileInput" type="file" multiple accept=".zip,.pdf,.docx,.doc,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.tif,.tiff,.webp" />
             <div class="privacy-note"><span>🔒</span><div><b>Файлы остаются в памяти текущей вкладки.</b> Код не использует localStorage, sessionStorage, IndexedDB или cookies для пользовательских документов. Внешняя правовая проверка отключена для текста ВНД и может передавать только реквизиты НПА после настройки защищённого backend.</div></div>
           </div>
