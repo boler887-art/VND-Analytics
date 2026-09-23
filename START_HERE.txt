@@ -1,4 +1,4 @@
-NORMATRIX VND Analytics v1.2.0 — ПОЛНАЯ ЗАМЕНА
+NORMATRIX VND Analytics v1.2.1 — ПОЛНАЯ ЗАМЕНА
 
 1. Загрузите содержимое этой папки в корень репозитория GitHub Pages.
 2. Сохраняйте имена `vnd_master.xlsx` и `structure.xlsx` неизменными; меняйте только строки/содержание при сохранении шапок.

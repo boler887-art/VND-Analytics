@@ -201,7 +201,7 @@ async function parseNormatrixFile(file){
 async function extractNormatrixReportsFromUpload(file){
   if(file.name.toLowerCase().endsWith('.normatrix'))return [await parseNormatrixFile(file)];
   if(ext(file.name)==='zip'){
-    const z=await JSZip.loadAsync(file);const entries=Object.values(z.files).filter(x=>!x.dir&&x.name.toLowerCase().endsWith('.normatrix'));const out=[];
+    const z=await loadZipRobust(file);const entries=Object.values(z.files).filter(x=>!x.dir&&x.name.toLowerCase().endsWith('.normatrix'));const out=[];
     for(const e of entries){const b=await e.async('blob');out.push(await parseNormatrixFile(new File([b],e.name,{type:'application/octet-stream'})));}return out;
   }
   throw new Error('поддерживаются .normatrix и ZIP-пакеты отчётов');
@@ -281,6 +281,31 @@ function detectPrimaryFiles(p,contentAware=false){
 }
 function setPrimaryManual(p,fileName){if(!p)return;const f=p.files.find(x=>x.name===fileName);if(!f)return;p.primaryFiles=[fileName];p.primaryConfidence=1;p.primarySource='manual';for(const x of p.files)x.isPrimary=x.name===fileName;buildQuality();renderAll();openPackage(p.key);toast(`Основным источником выбран ${fileName}`,'ok');}
 function mimeByExt(e){ return ({pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',tif:'image/tiff',tiff:'image/tiff',webp:'image/webp',txt:'text/plain'})[e]||'application/octet-stream'; }
+function zipNameScore(s){
+  s=String(s||''); if(!s)return -999;
+  const bad=(s.match(/\uFFFD/g)||[]).length+(s.match(/[\u0000-\u001F]/g)||[]).length*3;
+  const cyr=(s.match(/[А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/g)||[]).length;
+  const moj=(s.match(/[Џ®«¦ҐЁЈЎ©¬]/g)||[]).length;
+  const ascii=(s.match(/[A-Za-z0-9._\-/ ]/g)||[]).length;
+  return cyr*2+ascii*.08-moj*3-bad*8;
+}
+function decodeZipFileName(bytes){
+  const arr=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes||[]);
+  const variants=[];
+  for(const enc of ['utf-8','ibm866','windows-1251']){
+    try{variants.push(new TextDecoder(enc,{fatal:enc==='utf-8'}).decode(arr));}catch(_){ }
+  }
+  if(!variants.length) return Array.from(arr,b=>String.fromCharCode(b)).join('');
+  variants.sort((a,b)=>zipNameScore(b)-zipNameScore(a));
+  return variants[0];
+}
+async function loadZipRobust(source){
+  const data=source instanceof ArrayBuffer?source:source?.arrayBuffer?await source.arrayBuffer():source;
+  return JSZip.loadAsync(data,{decodeFileName:decodeZipFileName,createFolders:true});
+}
+function cleanZipPath(name){
+  return String(name||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\/+/, '');
+}
 async function ingestFiles(files){
   if(!files.length)return; const max=S.cfg.limits.maxVndPackages; if(S.packages.length+files.length>max){toast(`Максимум ${max} объектов загрузки за сессию`,'warn');return;}
   const allowed=new Set(['zip',...(JSON.parse(await fetchNoCache('package_schema.json','text'))).allowedExtensions]); let bad=files.filter(f=>!allowed.has(ext(f.name))); if(bad.length)toast(`Пропущены неподдерживаемые файлы: ${bad.map(x=>x.name).join(', ')}`,'warn');
@@ -297,13 +322,16 @@ async function ingestFiles(files){
 function makePhysical(blob,name){ const e=ext(name); const file=blob instanceof File?blob:new File([blob],name,{type:mimeByExt(e)}); const url=URL.createObjectURL(file);S.objectUrls.add(url);return {name,e,blob:file,size:file.size,role:roleFromName(name),lang:langFromName(name),objectUrl:url,text:'',pages:[],html:'',parseStatus:'pending',parseError:''}; }
 async function ingestZip(file){
   try{
-    const zip=await JSZip.loadAsync(file); const entries=[]; let declaredBytes=0;
+    const zip=await loadZipRobust(file); const entries=[]; let declaredBytes=0;
     const supported=new Set(['pdf','docx','doc','xlsx','xls','txt','jpg','jpeg','png','tif','tiff','webp']);
     const currentPhysical=S.packages.reduce((a,p)=>a+p.files.length,0);
     const currentBytes=S.packages.flatMap(p=>p.files).reduce((a,f)=>a+(f.size||0),0);
-    for(const [name,z] of Object.entries(zip.files)){
+    const skipped=[];
+    for(const [rawName,z] of Object.entries(zip.files)){
       if(z.dir)continue;
-      const e=ext(name); if(!supported.has(e))continue;
+      const name=cleanZipPath(rawName);
+      if(!name || /(?:^|\/)__MACOSX\//i.test(name) || /(?:^|\/)\.DS_Store$/i.test(name))continue;
+      const e=ext(name); if(!supported.has(e)){skipped.push(name);continue;}
       if(entries.length+currentPhysical>=S.cfg.limits.maxPhysicalFiles) throw new Error(`превышен лимит ${S.cfg.limits.maxPhysicalFiles} физических файлов`);
       const declared=Number(z?._data?.uncompressedSize||0); declaredBytes+=declared;
       if(declared && bytesMB(currentBytes+declaredBytes)>S.cfg.limits.maxSessionMB) throw new Error(`распакованный объём превысит ${S.cfg.limits.maxSessionMB} MB`);
@@ -311,8 +339,14 @@ async function ingestZip(file){
       if(bytesMB(blob.size)>S.cfg.limits.maxSingleFileMB) throw new Error(`${name}: после распаковки превышен лимит ${S.cfg.limits.maxSingleFileMB} MB`);
       entries.push(makePhysical(blob,name));
     }
+    if(!entries.length)throw new Error(`в архиве не найдено поддерживаемых документов. Поддерживаются: ${[...supported].join(', ')}`);
     await addPackage(file.name,entries,true);
-  }catch(e){S.ingestErrors.push({level:'error',type:'ZIP',message:`${file.name}: ${e.message}`});}
+    if(skipped.length)S.ingestErrors.push({level:'warn',type:'ZIP: пропущенные файлы',message:`${file.name}: пропущено неподдерживаемых файлов ${skipped.length}`});
+  }catch(e){
+    console.error('ZIP ingest failed',file?.name,e);
+    S.ingestErrors.push({level:'error',type:'ZIP',message:`${file.name}: ${e.message||e}`});
+    toast(`Не удалось загрузить ZIP ${file.name}: ${e.message||e}`,'error');
+  }
 }
 async function addPackage(containerName,physicalFiles,isZip=false){
   const m=containerName.match(/VND-\d{6}/i); const p={key:`PKG-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,containerName,isZip,vndId:m?m[0].toUpperCase():'',files:physicalFiles,match:null,matchConfidence:0,parsed:false,units:[],analysisStatus:'loaded',errors:[],primaryFiles:[],primaryConfidence:0,primarySource:'none'}; S.packages.push(p);

@@ -1,6 +1,6 @@
 {
   "systemName": "NORMATRIX VND Analytics",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "locale": "ru-RU",
   "dataSources": {
     "vndRegistry": "vnd_master.xlsx",
