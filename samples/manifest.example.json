@@ -1,0 +1,8 @@
+{
+  "vnd_id":"VND-000001",
+  "files":[
+    {"file":"MAIN__RU__SIGNED.pdf","type":"main","language":"ru"},
+    {"file":"ORDER.pdf","type":"approval_act"},
+    {"file":"APP01.pdf","type":"annex","number":1}
+  ]
+}
