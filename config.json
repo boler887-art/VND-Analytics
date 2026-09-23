@@ -1,0 +1,39 @@
+{
+  "systemName": "NORMATRIX VND Analytics",
+  "version": "1.0.0",
+  "locale": "ru-RU",
+  "dataSources": {
+    "vndRegistry": "vnd_master.xlsx",
+    "structure": "structure.xlsx"
+  },
+  "privacy": {
+    "zeroPersistence": true,
+    "useLocalStorage": false,
+    "useSessionStorage": false,
+    "persistUploadedFiles": false,
+    "persistAnalysisResults": false
+  },
+  "limits": {
+    "maxVndPackages": 300,
+    "maxPhysicalFiles": 5000,
+    "maxSingleFileMB": 100,
+    "maxSessionMB": 2048,
+    "maxAutoOcrImages": 20
+  },
+  "analysis": {
+    "exactDuplicateMinChars": 60,
+    "nearDuplicateThreshold": 0.72,
+    "conflictSimilarityThreshold": 0.55,
+    "maxCandidatePairs": 20000,
+    "autoRunAfterIngest": false,
+    "autoOcrImages": true,
+    "includeHistoricalRegistryRows": true
+  },
+  "legalVerification": {
+    "enabled": true,
+    "mode": "metadata-only",
+    "endpoint": "",
+    "allowSendingInternalText": false,
+    "requireExplicitConsentForText": true
+  }
+}

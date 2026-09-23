@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+  <title>NORMATRIX VND Analytics</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">N</div>
+      <div><h1>NORMATRIX</h1><small>VND Analytics</small></div>
+    </div>
+    <div class="session-badge"><strong>🔒 Временная сессия</strong>Документы и результаты не сохраняются после обновления/очистки.</div>
+    <nav class="nav" id="mainNav">
+      <button class="active" data-page="dashboard">▦ Сводная аналитика</button>
+      <button data-page="upload">⇧ Загрузка и анализ</button>
+      <button data-page="registry">▤ Реестр ВНД <span class="count" id="navRegistryCount">0</span></button>
+      <button data-page="departments">⌂ Подразделения</button>
+      <button data-page="monitoring">⚖ Правовой мониторинг <span class="count" id="navIssuesCount">0</span></button>
+      <button data-page="duplicates">≋ Дубли и пересечения</button>
+      <button data-page="conflicts">⇄ Противоречия</button>
+      <button data-page="legalrefs">§ НПА и ссылки</button>
+      <button data-page="quality">✓ Качество данных</button>
+      <button data-page="reports">⇩ Отчёты</button>
+    </nav>
+    <div class="side-footer">NORMATRIX v1.0.1<br>Реестр и структура читаются из корня сайта автоматически.</div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <h2 id="topTitle">Сводная аналитика ВНД</h2>
+      <div class="spacer"></div>
+      <div class="source-state">
+        <span class="source-chip" id="chipRegistry">Реестр: загрузка…</span>
+        <span class="source-chip" id="chipStructure">Структура: загрузка…</span>
+        <span class="source-chip ok">🔒 ZERO PERSISTENCE</span>
+      </div>
+      <button class="btn danger sm" id="clearSessionBtn">Очистить сессию</button>
+    </header>
+
+    <div class="content">
+      <section class="page active" id="page-dashboard">
+        <div class="page-head">
+          <div><h3>Состояние нормативной базы</h3><p>Общая картина по реестру и текущей загруженной сессии. Каждая карточка раскрывается до ВНД, пункта и исходного фрагмента.</p></div>
+          <div class="actions"><button class="btn primary" data-go="upload">Загрузить ВНД</button></div>
+        </div>
+        <div class="grid kpi" id="dashboardKpis"></div>
+        <div class="split">
+          <div class="panel"><div class="panel-title"><h4>Правовой мониторинг</h4><span class="meta" id="monitoringMeta">Нет активного анализа</span></div><div class="category-grid" id="dashboardCategories"></div></div>
+          <div class="panel"><div class="panel-title"><h4>Охват анализа</h4></div><div id="coveragePanel" class="empty"><strong>Документы ещё не загружены</strong>Реестр уже доступен. Загрузите ВНД для анализа содержания.</div></div>
+        </div>
+        <div class="panel"><div class="panel-title"><h4>Последние результаты текущей сессии</h4><span class="meta">не сохраняются</span></div><div id="dashboardIssues"></div></div>
+      </section>
+
+      <section class="page" id="page-upload">
+        <div class="page-head"><div><h3>Загрузка ВНД</h3><p>Поддерживаются одиночные документы и ZIP‑пакеты одного ВНД. Рекомендуемый формат архива: <b>VND-000001.zip</b>.</p></div></div>
+        <div class="panel">
+          <div class="upload-zone" id="dropZone">
+            <div class="big">Перетащите 1–300 ВНД или выберите файлы</div>
+            <p>PDF, DOCX, XLSX, XLS, TXT, JPG/JPEG, PNG, TIFF, WEBP, ZIP. Старый DOC учитывается в составе пакета, но для анализа текста рекомендуется конвертация в DOCX/PDF. В одном ZIP могут находиться основной текст, приказ, приложения, изменения и изображения страниц.</p>
+            <div class="upload-actions"><label class="btn primary" for="fileInput">Выбрать файлы</label><button class="btn" id="runAnalysisBtn" disabled>Запустить / повторить анализ</button></div>
+            <input id="fileInput" type="file" multiple accept=".zip,.pdf,.docx,.doc,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.tif,.tiff,.webp" />
+            <div class="privacy-note"><span>🔒</span><div><b>Файлы остаются в памяти текущей вкладки.</b> Код не использует localStorage, sessionStorage, IndexedDB или cookies для пользовательских документов. Внешняя правовая проверка отключена для текста ВНД и может передавать только реквизиты НПА после настройки защищённого backend.</div></div>
+          </div>
+        </div>
+        <div class="panel"><div class="panel-title"><h4>Проверка пакетов</h4><span class="meta" id="uploadSummary">0 ВНД / 0 файлов</span></div><div id="ingestProgress" class="hidden"><div class="progress"><span id="ingestBar"></span></div><div class="footer-note" id="ingestText"></div></div><div id="packageTable"></div></div>
+      </section>
+
+      <section class="page" id="page-registry">
+        <div class="page-head"><div><h3>Реестр ВНД</h3><p>Данные автоматически читаются из <b>vnd_master.xlsx</b>. Содержание можно обновлять без изменения кода, если шапки остаются прежними.</p></div></div>
+        <div class="panel">
+          <div class="filters" id="registryFilters">
+            <div class="field"><label>Поиск</label><input id="fSearch" placeholder="Название, номер, ID…"></div>
+            <div class="field"><label>Подразделение</label><select id="fDepartment"><option value="">Все</option></select></div>
+            <div class="field"><label>Ответственный</label><select id="fResponsible"><option value="">Все</option></select></div>
+            <div class="field"><label>Статус</label><select id="fStatus"><option value="">Все</option></select></div>
+            <div class="field"><label>Вид ВНД</label><select id="fType"><option value="">Все</option></select></div>
+            <div class="field"><label>Год</label><select id="fYear"><option value="">Все</option></select></div>
+          </div>
+          <div id="registryTable"></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-departments">
+        <div class="page-head"><div><h3>Структурные подразделения</h3><p>Рекомендации формируются по связанным замечаниям и объединяются по первопричине. Клик ведёт от рекомендации к ВНД → пункту → исходному тексту.</p></div></div>
+        <div id="departmentsGrid" class="grid"></div>
+      </section>
+
+      <section class="page" id="page-monitoring">
+        <div class="page-head"><div><h3>Правовой мониторинг</h3><p>Восемь категорий формы правового мониторинга. Локальные выводы являются аналитическими кандидатами до подтверждения специалистом.</p></div></div>
+        <div class="category-grid" id="monitoringCategories"></div>
+        <div class="panel" style="margin-top:16px"><div class="panel-title"><h4>Выявленные замечания</h4><span class="meta" id="issuesMeta"></span></div><div id="issuesTable"></div></div>
+      </section>
+
+      <section class="page" id="page-duplicates">
+        <div class="page-head"><div><h3>Дубли и смысловые пересечения</h3><p>Точные и близкие нормы группируются с объяснением сходства. Процент используется только как аналитический ориентир.</p></div></div>
+        <div class="panel"><div id="duplicatesTable"></div></div>
+      </section>
+
+      <section class="page" id="page-conflicts">
+        <div class="page-head"><div><h3>Противоречия</h3><p>Потенциальные конфликты сроков, модальности, полномочий, терминов и субъектов ответственности.</p></div></div>
+        <div class="panel"><div id="conflictsTable"></div></div>
+      </section>
+
+      <section class="page" id="page-legalrefs">
+        <div class="page-head"><div><h3>НПА и нормативные ссылки</h3><p>Сначала ссылки извлекаются локально. Интернет‑верификация должна использовать только официальные источники и не передавать полный текст ВНД.</p></div><div class="actions"><button class="btn" id="verifyLegalBtn">Проверить НПА</button></div></div>
+        <div class="callout warn" id="legalModeNotice">Внешний endpoint не настроен: портал покажет найденные ссылки и официальные источники для проверки, но не будет выдавать ложный статус «актуально».</div>
+        <div class="panel"><div id="legalRefsTable"></div></div>
+      </section>
+
+      <section class="page" id="page-quality">
+        <div class="page-head"><div><h3>Качество данных</h3><p>Контроль отсутствующих ID, нераспознанных пакетов, дублей файлов, неподдерживаемых форматов и неполного охвата реестра.</p></div></div>
+        <div class="grid kpi" id="qualityKpis"></div>
+        <div class="panel"><div id="qualityTable"></div></div>
+      </section>
+
+      <section class="page" id="page-reports">
+        <div class="page-head"><div><h3>Отчёты текущей сессии</h3><p>Экспортируется только текущий результат. После очистки портал не хранит копии.</p></div></div>
+        <div class="panel">
+          <div class="stat-line">
+            <button class="btn primary" id="exportXlsxBtn">Скачать аналитический Excel</button>
+            <button class="btn" id="exportJsonBtn">Скачать JSON результатов</button>
+            <button class="btn" id="printReportBtn">Печать / PDF</button>
+          </div>
+          <div class="footer-note">В Excel создаются листы: «Свод», «Приложение 3», «Рекомендации СП», «НПА», «Качество данных».</div>
+        </div>
+        <div class="panel"><div class="panel-title"><h4>Краткий отчёт</h4></div><div id="reportPreview"></div></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="detailModal">
+  <div class="modal-card">
+    <div class="modal-head"><h4 id="modalTitle">Детали</h4><div class="spacer"></div><button class="btn sm" id="modalClose">Закрыть</button></div>
+    <div class="modal-body"><aside class="modal-side" id="modalSide"></aside><section class="modal-main" id="modalMain"></section></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
