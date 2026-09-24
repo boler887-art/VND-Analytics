@@ -1,8 +1,8 @@
 {
-  "portalVersion": "1.2.1",
+  "portalVersion": "1.2.3",
   "dataSchemaVersion": "1.0",
-  "analysisRulesVersion": "2.0.0",
+  "analysisRulesVersion": "1.2.3",
   "methodology": "NORMATRIX VND Analytics — структурный Conflict Engine 2.0 + локальный предварительный аудит + подключаемая внешняя правовая верификация",
-  "version": "1.2.1",
-  "portal_version": "1.2.1"
+  "version": "1.2.3",
+  "portal_version": "1.2.3"
 }
